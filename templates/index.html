@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Todo App Demo</title>
+</head>
+<body>
+    <h1>Todo List (Powered by Custom RDBMS)</h1>
+
+    <!-- Form to add a new todo -->
+    <!-- Submits POST request to '/' route -->
+    <form method="post">
+        <input type="text" name="task" placeholder="Enter new task">
+        <button type="submit">Add Todo</button>
+    </form>
+
+    <!-- Display the list of todos -->
+    <ul>
+        {% for todo in todos %}
+            <li>
+                <!-- Show the task text -->
+                {{ todo['task'] }}
+
+                <!-- Link to edit this todo -->
+                <a href="{{ url_for('update', id=todo['id']) }}">Edit</a>
+
+                <!-- Link to delete this todo -->
+                <a href="{{ url_for('delete', id=todo['id']) }}">Delete</a>
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

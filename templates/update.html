@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Update Todo</title>
+</head>
+<body>
+    <h1>Update Task</h1>
+
+    <!-- Check if todo exists -->
+    {% if todo %}
+        <!-- Form to update the task -->
+        <!-- Submits POST request to /update/<id> -->
+        <form method="post">
+            <!-- Pre-fill the input with current task value -->
+            <input type="text" name="task" value="{{ todo['task'] }}">
+            <button type="submit">Update</button>
+        </form>
+    {% else %}
+        <!-- Show message if the todo item does not exist -->
+        <p>Todo not found.</p>
+    {% endif %}
+
+    <!-- Link back to main todo list page -->
+    <a href="{{ url_for('index') }}">Back to List</a>
+</body>
+</html>
