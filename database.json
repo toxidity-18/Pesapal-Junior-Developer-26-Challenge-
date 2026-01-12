@@ -1,0 +1,30 @@
+{
+  "tables": {
+    "users": {
+      "columns": [
+        [
+          "id",
+          "int"
+        ]
+      ],
+      "rows": [],
+      "primary_key": "id",
+      "uniques": []
+    },
+    "todos": {
+      "columns": [
+        [
+          "id",
+          "int"
+        ],
+        [
+          "task",
+          "str"
+        ]
+      ],
+      "rows": [],
+      "primary_key": "id",
+      "uniques": []
+    }
+  }
+}
