@@ -1,60 +1,62 @@
-# database.py
-from datetime import date        # Used to handle date values 
-import json                     # Used to save/load data from a file
-
+from datetime import date
+import json
 
 class SimpleRDBMS:
     def __init__(self, db_file='database.json'):
-        # Holds all tables in memory
         self.tables = {}
-
-        # File where data is saved
         self.db_file = db_file
-
-        # Load existing data if file exists
         self._load_from_file()
 
+    # ---------------- Persistence ----------------
     def _load_from_file(self):
-        # Load database data from JSON file
         try:
             with open(self.db_file, 'r') as f:
                 data = json.load(f)
                 self.tables = data.get('tables', {})
 
-                # Rebuild indexes since they are not stored in the file
-                for table_name in self.tables:
-                    self._rebuild_indexes(table_name)
+                # Convert date strings back to date objects
+                for table_name, table in self.tables.items():
+                    for row in table['rows']:
+                        for col_name, col_type in table['columns']:
+                            if col_type == 'date' and col_name in row and isinstance(row[col_name], str):
+                                row[col_name] = date.fromisoformat(row[col_name])
+
+                    # Rebuild indexes
+                    table['indexes'] = {}
+                    for col in [table['primary_key']] + table.get('uniques', []):
+                        self.create_index(table_name, col)
         except FileNotFoundError:
-            # No file yet → start with empty database
             pass
         except json.JSONDecodeError:
             raise ValueError("Database file is corrupted")
 
     def _save_to_file(self):
-        # Save database to JSON file (indexes are skipped)
-        with open(self.db_file, 'w') as f:
-            json.dump(
-                {
-                    'tables': {
-                        name: {k: v for k, v in table.items() if k != 'indexes'}
-                        for name, table in self.tables.items()
-                    }
-                },
-                f
-            )
+        serializable_tables = {}
+        for table_name, table in self.tables.items():
+            table_copy = {k: v for k, v in table.items() if k != 'indexes'}
+            table_copy['rows'] = []
+            for row in table['rows']:
+                new_row = {}
+                for col_name, value in row.items():
+                    if isinstance(value, date):
+                        new_row[col_name] = value.isoformat()
+                    else:
+                        new_row[col_name] = value
+                table_copy['rows'].append(new_row)
+            serializable_tables[table_name] = table_copy
 
+        with open(self.db_file, 'w') as f:
+            json.dump({'tables': serializable_tables}, f, indent=2)
+
+    # ---------------- Table Management ----------------
     def create_table(self, table_name, columns, primary_key, uniques=None):
-        # Create a new table with schema and constraints
         if uniques is None:
             uniques = []
-
         if table_name in self.tables:
-            raise ValueError("Table already exists")
-
+            raise ValueError(f"Table {table_name} already exists")
         column_names = [col[0] for col in columns]
         if primary_key not in column_names:
-            raise ValueError("Primary key must be a column")
-
+            raise ValueError("Primary key must be one of the columns")
         self.tables[table_name] = {
             'columns': columns,
             'rows': [],
@@ -62,132 +64,110 @@ class SimpleRDBMS:
             'uniques': uniques,
             'indexes': {}
         }
-
-        # Automatically index primary key
         self.create_index(table_name, primary_key)
+        for col in uniques:
+            self.create_index(table_name, col)
         self._save_to_file()
 
-    def _validate_data(self, table, data):
-        # Check column names and data types
-        columns = {name: dtype for name, dtype in table['columns']}
-
+    # ---------------- Validation ----------------
+    def _validate_data(self, table, data, require_pk=True):
+        """
+        Validate a row of data.
+        `require_pk=False` for updates where PK is not being changed.
+        """
+        columns_dict = {name: dtype for name, dtype in table['columns']}
         for col, val in data.items():
-            if col not in columns:
+            if col not in columns_dict:
                 raise ValueError(f"Invalid column: {col}")
-
-            if columns[col] == 'int':
+            dtype = columns_dict[col]
+            if dtype == 'int':
                 data[col] = int(val)
-            elif columns[col] == 'str':
+            elif dtype == 'str':
                 data[col] = str(val)
-            elif columns[col] == 'date':
+            elif dtype == 'date':
                 if isinstance(val, str):
                     data[col] = date.fromisoformat(val)
                 elif not isinstance(val, date):
                     raise ValueError(f"{col} must be a date")
-
-        # Primary key must be present
-        if table['primary_key'] not in data:
+        if require_pk and table['primary_key'] not in data:
             raise ValueError("Primary key is required")
 
+    # ---------------- CRUD ----------------
     def insert(self, table_name, data):
-        # Add a new row to a table
         table = self.tables.get(table_name)
         if not table:
             raise ValueError("Table not found")
-
-        self._validate_data(table, data)
+        self._validate_data(table, data, require_pk=True)
 
         pk = table['primary_key']
-
-        # Check primary key uniqueness
-        for row in table['rows']:
-            if row[pk] == data[pk]:
-                raise ValueError("Duplicate primary key")
-
-        # Check unique columns
+        if any(row[pk] == data[pk] for row in table['rows']):
+            raise ValueError("Duplicate primary key")
         for col in table['uniques']:
-            for row in table['rows']:
-                if row.get(col) == data.get(col):
-                    raise ValueError(f"Duplicate value in {col}")
+            if col in data and any(row.get(col) == data[col] for row in table['rows']):
+                raise ValueError(f"Duplicate value in unique column: {col}")
 
         table['rows'].append(data)
         self._update_indexes(table_name, len(table['rows']) - 1)
         self._save_to_file()
 
     def select(self, table_name, where=None):
-        # Get rows from a table
         table = self.tables.get(table_name)
         if not table:
             raise ValueError("Table not found")
-
         if where is None:
             return [row.copy() for row in table['rows']]
-
-        # Filter rows based on conditions
-        return [
+        results = [
             row.copy()
             for row in table['rows']
             if all(row.get(k) == v for k, v in where.items())
         ]
+        return results
 
     def update(self, table_name, where, updates):
-        # Update a row using primary key
         table = self.tables.get(table_name)
         if not table:
             raise ValueError("Table not found")
-
         pk = table['primary_key']
         if pk not in where:
             raise ValueError("Primary key required for update")
-
         for idx, row in enumerate(table['rows']):
             if row[pk] == where[pk]:
-                self._validate_data(table, updates)
-
-                for key, val in updates.items():
-                    if key == pk:
+                self._validate_data(table, updates, require_pk=False)
+                for k, v in updates.items():
+                    if k == pk:
                         raise ValueError("Cannot update primary key")
-                    row[key] = val
-
+                    row[k] = v
                 self._update_indexes(table_name, idx, rebuild=True)
                 self._save_to_file()
                 return
-
         raise ValueError("Row not found")
 
     def delete(self, table_name, where):
-        # Delete a row using primary key
         table = self.tables.get(table_name)
         if not table:
             raise ValueError("Table not found")
-
         pk = table['primary_key']
         if pk not in where:
             raise ValueError("Primary key required for delete")
-
         for idx, row in enumerate(table['rows']):
             if row[pk] == where[pk]:
                 del table['rows'][idx]
                 self._rebuild_indexes(table_name)
                 self._save_to_file()
                 return
-
         raise ValueError("Row not found")
 
+    # ---------------- Indexing ----------------
     def create_index(self, table_name, column):
-        # Create an index on a column
         table = self.tables.get(table_name)
         if not table:
             raise ValueError("Table not found")
-
         table['indexes'][column] = {}
         self._rebuild_indexes(table_name, [column])
 
     def _update_indexes(self, table_name, row_idx, rebuild=False):
-        # Update index entries when a row is added or changed
         table = self.tables[table_name]
         row = table['rows'][row_idx]
-
         for col in table['indexes']:
             if rebuild:
                 self._rebuild_indexes(table_name, [col])
@@ -196,31 +176,29 @@ class SimpleRDBMS:
                 table['indexes'][col].setdefault(val, []).append(row_idx)
 
     def _rebuild_indexes(self, table_name, columns=None):
-        # Rebuild indexes from scratch
         table = self.tables[table_name]
         if columns is None:
-            columns = table['indexes'].keys()
-
+            columns = list(table['indexes'].keys())
         for col in columns:
             table['indexes'][col] = {}
-            for i, row in enumerate(table['rows']):
-                table['indexes'][col].setdefault(row.get(col), []).append(i)
+            for idx, row in enumerate(table['rows']):
+                table['indexes'][col].setdefault(row.get(col), []).append(idx)
 
+    # ---------------- Join ----------------
     def join(self, table_name1, table_name2, on_column):
-        # Simple inner join between two tables
         t1 = self.tables.get(table_name1)
         t2 = self.tables.get(table_name2)
-
         if not t1 or not t2:
             raise ValueError("Table not found")
-
         results = []
+        # Attempt to match columns intelligently: if on_column missing in t2, try primary key
         for r1 in t1['rows']:
             for r2 in t2['rows']:
-                if r1.get(on_column) == r2.get(on_column):
-                    row = r1.copy()
+                val1 = r1.get(on_column)
+                val2 = r2.get(on_column) or r2.get(t2['primary_key'])
+                if val1 == val2:
+                    combined = r1.copy()
                     for k, v in r2.items():
-                        row[f"{table_name2}_{k}"] = v
-                    results.append(row)
-
+                        combined[f"{table_name2}_{k}"] = v
+                    results.append(combined)
         return results

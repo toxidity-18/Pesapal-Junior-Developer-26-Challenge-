@@ -1,4 +1,3 @@
-# parser.py
 import re                      # Used to match and extract parts of commands
 from database import SimpleRDBMS
 
